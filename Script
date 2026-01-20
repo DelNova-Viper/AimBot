@@ -1,0 +1,532 @@
+--!strict
+--[[ 
+    DELNOVA-VIPER AIM-BOT (FINAL EDITION)
+    - GUI: Modern Dark Theme, Animations, Scrolling, AlwaysOnTop
+    - LOGIC: High Performance Aim/ESP (V6 Logic)
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- // SİSTEM AYARLARI //
+local settings = {
+    ESP_Enabled = true,
+    Aim_Enabled = true,
+    Circle_Visible = true,
+    Radius = 120,
+    MaxDistance = 1000,
+    ResetInterval = 5
+}
+
+local active = true
+local isMouseDown = false
+local lockedTarget: BasePart? = nil
+local lastReset = tick()
+local lastEspUpdate = 0
+
+-- UI Elementlerini dışarıdan kontrol etmek için referanslar
+local uiToggles = {} 
+
+-- // FOV CIRCLE //
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1.5
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+FOVCircle.Filled = false
+FOVCircle.Transparency = 1
+FOVCircle.NumSides = 64
+
+-- // YARDIMCI FONKSİYONLAR //
+local function isVisible(part: BasePart)
+    if not part then return false end
+    local origin = Camera.CFrame.Position
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, part.Parent}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local result = workspace:Raycast(origin, part.Position - origin, rayParams)
+    return result == nil
+end
+
+local function fullCleanup()
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character then
+            for _, o in pairs(p.Character:GetDescendants()) do
+                if o.Name == "ESPHighlight" or o.Name == "NameTag" then o:Destroy() end
+            end
+        end
+    end
+end
+
+-- // MODERN GUI OLUŞTURMA //
+local function createGui()
+    -- Eski GUI varsa temizle
+    if LocalPlayer.PlayerGui:FindFirstChild("DelNova-Viper AIm-bot") then
+        LocalPlayer.PlayerGui["DelNova-Viper AIm-bot"]:Destroy()
+    end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "DelNova-Viper AIm-bot" -- İsim Güncellendi
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.IgnoreGuiInset = true
+    ScreenGui.DisplayOrder = 9999 -- HER ZAMAN EN ÜSTTE
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    -- Renk Paleti
+    local COLORS = {
+        MainBg = Color3.fromRGB(25, 25, 30),
+        Header = Color3.fromRGB(35, 35, 40),
+        Element = Color3.fromRGB(45, 45, 50),
+        Accent = Color3.fromRGB(255, 60, 60), -- Kırmızı/Turuncu Tema
+        Text = Color3.fromRGB(255, 255, 255),
+        Green = Color3.fromRGB(0, 255, 128)
+    }
+
+    -- 1. Mini Button
+    local MiniFrame = Instance.new("Frame")
+    MiniFrame.Size = UDim2.new(0, 50, 0, 50)
+    MiniFrame.Position = UDim2.new(0.02, 0, 0.5, -25)
+    MiniFrame.BackgroundColor3 = COLORS.Header
+    MiniFrame.Visible = false
+    MiniFrame.Active = true
+    MiniFrame.Draggable = true
+    MiniFrame.Parent = ScreenGui
+    Instance.new("UICorner", MiniFrame).CornerRadius = UDim.new(1, 0)
+    
+    local MiniStroke = Instance.new("UIStroke")
+    MiniStroke.Color = COLORS.Accent
+    MiniStroke.Thickness = 2
+    MiniStroke.Parent = MiniFrame
+
+    local MiniBtn = Instance.new("TextButton")
+    MiniBtn.Size = UDim2.new(1,0,1,0)
+    MiniBtn.BackgroundTransparency = 1
+    MiniBtn.Text = "⚡"
+    MiniBtn.TextColor3 = COLORS.Accent
+    MiniBtn.TextSize = 24
+    MiniBtn.Parent = MiniFrame
+
+    -- Dönme Animasyonu
+    task.spawn(function()
+        local rot = 0
+        while active do
+            if MiniFrame.Visible then
+                rot = rot + 2
+                MiniFrame.Rotation = rot
+            end
+            task.wait(0.03)
+        end
+    end)
+
+    -- 2. Ana Panel
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 300, 0, 420)
+    -- KONUM: Ekranın ortasının biraz solu (0.35)
+    MainFrame.Position = UDim2.new(0.35, -150, 0.5, -210) 
+    MainFrame.BackgroundColor3 = COLORS.MainBg
+    MainFrame.ClipsDescendants = true
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.Parent = ScreenGui
+    MainFrame.Size = UDim2.new(0, 0, 0, 0) -- Animasyon için başlangıç
+
+    Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+    local MainStroke = Instance.new("UIStroke")
+    MainStroke.Color = COLORS.Header
+    MainStroke.Thickness = 2
+    MainStroke.Parent = MainFrame
+
+    -- Header
+    local Header = Instance.new("Frame")
+    Header.Size = UDim2.new(1, 0, 0, 40)
+    Header.BackgroundColor3 = COLORS.Header
+    Header.Parent = MainFrame
+    Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 8)
+    
+    local HeaderFix = Instance.new("Frame")
+    HeaderFix.Size = UDim2.new(1, 0, 0, 10)
+    HeaderFix.Position = UDim2.new(0, 0, 1, -10)
+    HeaderFix.BackgroundColor3 = COLORS.Header
+    HeaderFix.BorderSizePixel = 0
+    HeaderFix.Parent = Header
+
+    local Title = Instance.new("TextLabel")
+    Title.Text = "⚡ DelNova-Viper AIm-bot" -- Başlık Güncellendi
+    Title.Size = UDim2.new(1, -70, 1, 0)
+    Title.Position = UDim2.new(0, 15, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = COLORS.Text
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 14
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.Parent = Header
+
+    -- Kontrol Butonları
+    local function createCtrlBtn(text, color, posOffset, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 25, 0, 25)
+        btn.Position = UDim2.new(1, posOffset, 0.5, -12.5)
+        btn.BackgroundColor3 = color
+        btn.Text = text
+        btn.Font = Enum.Font.GothamBold
+        btn.TextColor3 = COLORS.Text
+        btn.Parent = Header
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+        btn.MouseButton1Click:Connect(callback)
+        return btn
+    end
+
+    createCtrlBtn("-", Color3.fromRGB(80, 80, 80), -65, function()
+        local tween = TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Size = UDim2.new(0,0,0,0), BackgroundTransparency = 1})
+        tween:Play()
+        if MainStroke then TweenService:Create(MainStroke, TweenInfo.new(0.3), {Transparency = 1}):Play() end
+        tween.Completed:Wait()
+        MainFrame.Visible = false
+        MiniFrame.Visible = true
+        MiniFrame.Size = UDim2.new(0,0,0,0)
+        TweenService:Create(MiniFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 50, 0, 50)}):Play()
+    end)
+
+    createCtrlBtn("X", COLORS.Accent, -35, function()
+        active = false
+        fullCleanup()
+        FOVCircle:Remove()
+        ScreenGui:Destroy()
+    end)
+
+    MiniBtn.MouseButton1Click:Connect(function()
+        local t = TweenService:Create(MiniFrame, TweenInfo.new(0.3), {Size = UDim2.new(0,0,0,0)})
+        t:Play()
+        t.Completed:Wait()
+        MiniFrame.Visible = false
+        MainFrame.Visible = true
+        MainFrame.BackgroundTransparency = 0
+        if MainStroke then MainStroke.Transparency = 0 end
+        TweenService:Create(MainFrame, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 300, 0, 420)}):Play()
+    end)
+
+    -- Scrolling Content
+    local ScrollingFrame = Instance.new("ScrollingFrame")
+    ScrollingFrame.Size = UDim2.new(1, -10, 1, -50)
+    ScrollingFrame.Position = UDim2.new(0, 5, 0, 45)
+    ScrollingFrame.BackgroundTransparency = 1
+    ScrollingFrame.BorderSizePixel = 0
+    ScrollingFrame.ScrollBarThickness = 4
+    ScrollingFrame.ScrollBarImageColor3 = COLORS.Accent
+    ScrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    ScrollingFrame.CanvasSize = UDim2.new(0,0,0,0)
+    ScrollingFrame.Parent = MainFrame
+
+    local UIList = Instance.new("UIListLayout")
+    UIList.Padding = UDim.new(0, 8)
+    UIList.SortOrder = Enum.SortOrder.LayoutOrder
+    UIList.Parent = ScrollingFrame
+
+    local UIPadding = Instance.new("UIPadding")
+    UIPadding.PaddingLeft = UDim.new(0, 5)
+    UIPadding.PaddingRight = UDim.new(0, 5)
+    UIPadding.PaddingTop = UDim.new(0, 5)
+    UIPadding.PaddingBottom = UDim.new(0, 5)
+    UIPadding.Parent = ScrollingFrame
+
+    -- --- UI Componentleri ---
+    local function createSectionTitle(text)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, 0, 0, 25)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = text
+        lbl.TextColor3 = Color3.fromRGB(150, 150, 150)
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 12
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = ScrollingFrame
+    end
+
+    local function createToggle(text, icon, settingKey, callback)
+        local Frame = Instance.new("Frame")
+        Frame.Size = UDim2.new(1, 0, 0, 40)
+        Frame.BackgroundColor3 = COLORS.Element
+        Frame.Parent = ScrollingFrame
+        Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+
+        local Label = Instance.new("TextLabel")
+        Label.Size = UDim2.new(0.7, 0, 1, 0)
+        Label.Position = UDim2.new(0, 10, 0, 0)
+        Label.BackgroundTransparency = 1
+        Label.Text = icon .. "  " .. text
+        Label.Font = Enum.Font.GothamSemibold
+        Label.TextColor3 = COLORS.Text
+        Label.TextSize = 14
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = Frame
+
+        local Toggler = Instance.new("TextButton")
+        Toggler.Size = UDim2.new(0, 40, 0, 20)
+        Toggler.Position = UDim2.new(1, -50, 0.5, -10)
+        Toggler.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        Toggler.Text = ""
+        Toggler.Parent = Frame
+        local TC = Instance.new("UICorner", Toggler)
+        TC.CornerRadius = UDim.new(1, 0)
+
+        local Circle = Instance.new("Frame")
+        Circle.Size = UDim2.new(0, 16, 0, 16)
+        Circle.Position = UDim2.new(0, 2, 0.5, -8)
+        Circle.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+        Circle.Parent = Toggler
+        local CC = Instance.new("UICorner", Circle)
+        CC.CornerRadius = UDim.new(1, 0)
+
+        local toggled = settings[settingKey] or false
+        
+        local function updateState(newState)
+            toggled = newState
+            local targetPos = toggled and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+            local targetColor = toggled and COLORS.Accent or Color3.fromRGB(200, 200, 200)
+            local targetBg = toggled and Color3.fromRGB(60, 30, 30) or Color3.fromRGB(30, 30, 30)
+
+            TweenService:Create(Circle, TweenInfo.new(0.2), {Position = targetPos, BackgroundColor3 = targetColor}):Play()
+            TweenService:Create(Toggler, TweenInfo.new(0.2), {BackgroundColor3 = targetBg}):Play()
+        end
+
+        updateState(toggled) -- İlk durum
+
+        Toggler.MouseButton1Click:Connect(function()
+            toggled = not toggled
+            callback(toggled)
+            updateState(toggled)
+        end)
+        
+        uiToggles[settingKey] = updateState
+    end
+
+    local function createSlider(text, min, max, default, callback)
+        local Frame = Instance.new("Frame")
+        Frame.Size = UDim2.new(1, 0, 0, 50)
+        Frame.BackgroundColor3 = COLORS.Element
+        Frame.Parent = ScrollingFrame
+        Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+
+        local Label = Instance.new("TextLabel")
+        Label.Size = UDim2.new(1, -10, 0, 20)
+        Label.Position = UDim2.new(0, 10, 0, 5)
+        Label.BackgroundTransparency = 1
+        Label.Text = text
+        Label.TextColor3 = COLORS.Text
+        Label.Font = Enum.Font.GothamSemibold
+        Label.TextSize = 14
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = Frame
+
+        local ValueLabel = Instance.new("TextLabel")
+        ValueLabel.Size = UDim2.new(0, 50, 0, 20)
+        ValueLabel.Position = UDim2.new(1, -60, 0, 5)
+        ValueLabel.BackgroundTransparency = 1
+        ValueLabel.Text = tostring(default)
+        ValueLabel.TextColor3 = COLORS.Accent
+        ValueLabel.Font = Enum.Font.GothamBold
+        ValueLabel.TextSize = 14
+        ValueLabel.Parent = Frame
+
+        local SliderBar = Instance.new("Frame")
+        SliderBar.Size = UDim2.new(1, -20, 0, 6)
+        SliderBar.Position = UDim2.new(0, 10, 0, 35)
+        SliderBar.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        SliderBar.Parent = Frame
+        Instance.new("UICorner", SliderBar).CornerRadius = UDim.new(1, 0)
+
+        local Fill = Instance.new("Frame")
+        Fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+        Fill.BackgroundColor3 = COLORS.Accent
+        Fill.Parent = SliderBar
+        Instance.new("UICorner", Fill).CornerRadius = UDim.new(1, 0)
+
+        local Trigger = Instance.new("TextButton")
+        Trigger.Size = UDim2.new(1, 0, 1, 0)
+        Trigger.BackgroundTransparency = 1
+        Trigger.Text = ""
+        Trigger.Parent = SliderBar
+
+        local dragging = false
+        local function update(input)
+            local pos = math.clamp((input.Position.X - SliderBar.AbsolutePosition.X) / SliderBar.AbsoluteSize.X, 0, 1)
+            TweenService:Create(Fill, TweenInfo.new(0.1), {Size = UDim2.new(pos, 0, 1, 0)}):Play()
+            local value = math.floor(min + (max - min) * pos)
+            ValueLabel.Text = tostring(value)
+            callback(value)
+        end
+
+        Trigger.MouseButton1Down:Connect(function() dragging = true end)
+        UserInputService.InputEnded:Connect(function(input) 
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end 
+        end)
+        UserInputService.InputChanged:Connect(function(input) 
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then update(input) end 
+        end)
+    end
+
+    -- --- MENÜ İÇERİĞİ ---
+    createSectionTitle("COMBAT ASSIST")
+    createToggle("AimBot Enabled (T)", "🎯", "Aim_Enabled", function(s) settings.Aim_Enabled = s end)
+    createToggle("Show FOV Circle", "⭕", "Circle_Visible", function(s) settings.Circle_Visible = s end)
+    createSlider("FOV Radius", 20, 600, settings.Radius, function(v) settings.Radius = v end)
+
+    createSectionTitle("VISUALS")
+    createToggle("ESP Enabled (E)", "👁️", "ESP_Enabled", function(s) 
+        settings.ESP_Enabled = s 
+        if not s then fullCleanup() end
+    end)
+    createSlider("ESP Distance", 100, 3000, settings.MaxDistance, function(v) settings.MaxDistance = v end)
+
+    createSectionTitle("SYSTEM")
+    local exitBtn = Instance.new("TextButton")
+    exitBtn.Size = UDim2.new(1, 0, 0, 35)
+    exitBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+    exitBtn.Text = "UNLOAD SCRIPT"
+    exitBtn.Font = Enum.Font.GothamBold
+    exitBtn.TextColor3 = COLORS.Text
+    exitBtn.Parent = ScrollingFrame
+    Instance.new("UICorner", exitBtn).CornerRadius = UDim.new(0, 6)
+    exitBtn.MouseButton1Click:Connect(function()
+        active = false
+        fullCleanup()
+        FOVCircle:Remove()
+        ScreenGui:Destroy()
+    end)
+
+    -- Açılış Animasyonu
+    MainFrame.Visible = true
+    TweenService:Create(MainFrame, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 300, 0, 420)}):Play()
+end
+
+createGui()
+
+-- // LOGIC ENGINE (ELITE V6) //
+
+-- 1. AIMBOT MOTORU
+RunService.RenderStepped:Connect(function()
+    if not active then return end
+
+    -- FOV Update
+    FOVCircle.Visible = settings.Circle_Visible
+    FOVCircle.Radius = settings.Radius
+    FOVCircle.Position = UserInputService:GetMouseLocation()
+
+    -- Aim Logic
+    if isMouseDown and settings.Aim_Enabled then
+        if lockedTarget and lockedTarget.Parent and lockedTarget.Parent:FindFirstChild("Humanoid") and lockedTarget.Parent.Humanoid.Health > 0 then
+            if isVisible(lockedTarget) then
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, lockedTarget.Position)
+                return 
+            end
+        end
+
+        local target = nil
+        local dist = settings.Radius
+
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+                local head = player.Character.Head
+                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                
+                if onScreen then
+                    local mag = (Vector2.new(screenPos.X, screenPos.Y) - FOVCircle.Position).Magnitude
+                    if mag < dist then
+                        if isVisible(head) then 
+                            dist = mag
+                            target = head
+                        end
+                    end
+                end
+            end
+        end
+        lockedTarget = target
+        if lockedTarget then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, lockedTarget.Position)
+        end
+    else
+        lockedTarget = nil
+    end
+end)
+
+-- 2. ESP MOTORU
+RunService.Heartbeat:Connect(function()
+    if not active or not settings.ESP_Enabled then return end
+    
+    if tick() - lastEspUpdate < 0.1 then return end
+    lastEspUpdate = tick()
+
+    if tick() - lastReset >= settings.ResetInterval then
+        fullCleanup()
+        lastReset = tick()
+    end
+
+    for _, player in pairs(Players:GetPlayers()) do
+        local char = player.Character
+        if player ~= LocalPlayer and char and char:FindFirstChild("Head") then
+            local head = char.Head
+            
+            local mag = (LocalPlayer.Character.HumanoidRootPart.Position - head.Position).Magnitude
+            if mag <= settings.MaxDistance then
+                local seen = isVisible(head)
+                local color = seen and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+
+                local hl = char:FindFirstChild("ESPHighlight")
+                if not hl then
+                    hl = Instance.new("Highlight", char)
+                    hl.Name = "ESPHighlight"
+                end
+                
+                hl.FillColor = color
+                hl.OutlineTransparency = 0.8
+                hl.Adornee = char
+
+                if not head:FindFirstChild("NameTag") then
+                    local bb = Instance.new("BillboardGui", head)
+                    bb.Name = "NameTag"
+                    bb.Size = UDim2.new(0, 100, 0, 30)
+                    bb.AlwaysOnTop = true
+                    bb.ExtentsOffset = Vector3.new(0, 3, 0)
+                    local lbl = Instance.new("TextLabel", bb)
+                    lbl.Size = UDim2.new(1, 0, 1, 0)
+                    lbl.Text = player.Name
+                    lbl.BackgroundTransparency = 1
+                    lbl.TextColor3 = Color3.new(1, 1, 1)
+                    lbl.Font = Enum.Font.SourceSansBold
+                    lbl.TextStrokeTransparency = 0.5
+                    lbl.TextSize = 14
+                end
+            end
+        end
+    end
+end)
+
+-- 3. INPUT SİSTEMİ
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not active then return end
+    
+    if not gpe then
+        if input.KeyCode == Enum.KeyCode.E then
+            settings.ESP_Enabled = not settings.ESP_Enabled
+            if not settings.ESP_Enabled then fullCleanup() end
+            if uiToggles["ESP_Enabled"] then uiToggles["ESP_Enabled"](settings.ESP_Enabled) end
+            
+        elseif input.KeyCode == Enum.KeyCode.T then
+            settings.Aim_Enabled = not settings.Aim_Enabled
+            if uiToggles["Aim_Enabled"] then uiToggles["Aim_Enabled"](settings.Aim_Enabled) end
+            
+        elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+            isMouseDown = true
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isMouseDown = false
+        lockedTarget = nil
+    end
+end)
